@@ -13,8 +13,8 @@ pub fn encode_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
     };
     let expanded = quote! {
         #[automatically_derived]
-        impl #impl_generics Encode for #name #type_generics #where_clause {
-            fn encode<__CerditoEncoderTypeParam: Encoder>(
+        impl #impl_generics ::cerdito::Encode for #name #type_generics #where_clause {
+            fn encode<__CerditoEncoderTypeParam: ::cerdito::Encoder>(
                 &self,
                 encoder: &mut __CerditoEncoderTypeParam
             ) -> Result<(), __CerditoEncoderTypeParam::Error> {
@@ -37,8 +37,8 @@ pub fn decode_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
     };
     let expanded = quote! {
         #[automatically_derived]
-        impl #impl_generics Decode for #name #type_generics #where_clause {
-            fn decode<__CerditoDecoderTypeParam: Decoder>(
+        impl #impl_generics ::cerdito::Decode for #name #type_generics #where_clause {
+            fn decode<__CerditoDecoderTypeParam: ::cerdito::Decoder>(
                 decoder: &mut __CerditoDecoderTypeParam
             ) -> Result<Self, __CerditoDecoderTypeParam::Error> {
                 #body
@@ -150,7 +150,7 @@ fn generate_decode_for_struct(
             quote! {
                 decoder.decode_elem_begin(#i, Some(#field_name))?;
                 let #field_ident = if #i < __cerdito_len {
-                    <#field_type as Decode>::decode(decoder)?
+                    <#field_type as ::cerdito::Decode>::decode(decoder)?
                 } else { // new program, old data
                     <#field_type>::default() // TODO: Or fail if Default isn't implemented? 
                 };
@@ -306,7 +306,7 @@ fn generate_decode_for_enum(
                     quote! {
                         decoder.decode_elem_begin(#i, Some(#field_name))?;
                         let #field_ident = if #i < __cerdito_len {
-                            <#field_type as Decode>::decode(decoder)?
+                            <#field_type as ::cerdito::Decode>::decode(decoder)?
                         } else { // new program, old data
                             <#field_type>::default()
                         };

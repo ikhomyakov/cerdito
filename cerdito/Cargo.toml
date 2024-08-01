@@ -1,12 +1,12 @@
 [package]
-name = "cerdito-derive"
+name = "cerdito"
 authors = ["Igor Y. Khomyakov <ikh@ikhsoftware.com>", "Dmitriy Kumshayev <dq@mail.com>"]
-version = "0.1.3"
+version = "0.1.1"
 edition = "2021"
-#homepage = "https://www.ikhsoftware.com/cerdito/cerdito-derive"
+#homepage = "https://www.ikhsoftware.com/cerdito/cerdito"
 keywords = ["serialization", "deserialization", "encoding", "decoding"]
 categories = ["encoding"]
-description = "Derive macros for Rust encoding and decoding framework"
+description = "Rust encoding and decoding framework"
 #documentation = "https://docs.rs/cerdito"
 license = "GPL-3.0"
 readme = "README.md"
@@ -14,9 +14,6 @@ repository = "https://github.com/ikhomyakov/cerdito"
 rust-version = "1.79"
 
 [dependencies]
-syn = "2.0"
-quote = "1.0"
-proc-macro2 = "1.0"
-
-[lib]
-proc-macro = true
+build_async = "0.1.1"
+cerdito-derive = { version = "0.1.3", path = "../cerdito-derive" }
+paste = "1.0.15"
