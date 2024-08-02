@@ -1,3 +1,3 @@
 mod cerdito;
-pub use crate::cerdito::{Encode, Decode, Encoder, Decoder, ByteVec, ByteArr};
-pub use cerdito_derive::{Encode, Decode};
+pub use crate::cerdito::{ByteArr, ByteVec, Decode, Decoder, Encode, Encoder};
+pub use cerdito_derive::{Decode, Encode};

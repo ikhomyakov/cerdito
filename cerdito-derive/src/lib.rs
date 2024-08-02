@@ -14,7 +14,7 @@ pub fn encode_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
     let expanded = quote! {
         #[automatically_derived]
         impl #impl_generics ::cerdito::Encode for #name #type_generics #where_clause {
-            fn encode<__CerditoEncoderTypeParam: ::cerdito::Encoder>(
+            #[_async] fn encode<__CerditoEncoderTypeParam: ::cerdito::Encoder>(
                 &self,
                 encoder: &mut __CerditoEncoderTypeParam
             ) -> Result<(), __CerditoEncoderTypeParam::Error> {
@@ -38,7 +38,7 @@ pub fn decode_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
     let expanded = quote! {
         #[automatically_derived]
         impl #impl_generics ::cerdito::Decode for #name #type_generics #where_clause {
-            fn decode<__CerditoDecoderTypeParam: ::cerdito::Decoder>(
+            #[_async] fn decode<__CerditoDecoderTypeParam: ::cerdito::Decoder>(
                 decoder: &mut __CerditoDecoderTypeParam
             ) -> Result<Self, __CerditoDecoderTypeParam::Error> {
                 #body
@@ -104,31 +104,31 @@ fn generate_encode_for_struct(
         .iter()
         .map(|(i, field_ident, field_name, _)| {
             quote! {
-                encoder.encode_elem_begin(#i, Some(#field_name))?;
-                #field_ident.encode(encoder)?;
-                encoder.encode_elem_end()?;
+                _await!(encoder.encode_elem_begin(#i, Some(#field_name)))?;
+                _await!(#field_ident.encode(encoder))?;
+                _await!(encoder.encode_elem_end())?;
             }
         })
         .collect();
     let fields_len = fields.len();
     match &data.fields {
         syn::Fields::Named(_) => quote! {
-            encoder.encode_struct_begin(#fields_len, Some(#name_str))?;
+            _await!(encoder.encode_struct_begin(#fields_len, Some(#name_str)))?;
             let Self { #(#field_idents),* } = self;
             #(#field_codes)*
-            encoder.encode_struct_end()?;
+            _await!(encoder.encode_struct_end())?;
             Ok(())
         },
         syn::Fields::Unnamed(_) => quote! {
-            encoder.encode_struct_begin(#fields_len, Some(#name_str))?;
+            _await!(encoder.encode_struct_begin(#fields_len, Some(#name_str)))?;
             let Self( #(#field_idents),* ) = self;
             #(#field_codes)*
-            encoder.encode_struct_end()?;
+            _await!(encoder.encode_struct_end())?;
             Ok(())
         },
         syn::Fields::Unit => quote! {
-            encoder.encode_struct_begin(#fields_len, Some(#name_str))?;
-            encoder.encode_struct_end()?;
+            _await!(encoder.encode_struct_begin(#fields_len, Some(#name_str)))?;
+            _await!(encoder.encode_struct_end())?;
             Ok(())
         },
     }
@@ -148,43 +148,44 @@ fn generate_decode_for_struct(
         .iter()
         .map(|(i, field_ident, field_name, field_type)| {
             quote! {
-                decoder.decode_elem_begin(#i, Some(#field_name))?;
+                _await!(decoder.decode_elem_begin(#i, Some(#field_name)))?;
                 let #field_ident = if #i < __cerdito_len {
-                    <#field_type as ::cerdito::Decode>::decode(decoder)?
+                    _await!(<#field_type as ::cerdito::Decode>::decode(decoder))?
                 } else { // new program, old data
-                    <#field_type>::default() // TODO: Or fail if Default isn't implemented? 
+                    <#field_type>::default() // TODO: Or fail if Default isn't implemented?
                 };
-                decoder.decode_elem_end()?;
+                _await!(decoder.decode_elem_end())?;
             }
         })
         .collect();
     let fields_len = fields.len();
 
     let compat = quote! {
-        for _ in #fields_len..__cerdito_len { // old program, new data
-            decoder.decode_skip()?;
+        // old program, new data
+        if __cerdito_len > #fields_len {
+            _await!(decoder.decode_skip(__cerdito_len - #fields_len))?;
         }
     };
 
     match &data.fields {
         syn::Fields::Named(_) => quote! {
-            let __cerdito_len = decoder.decode_struct_begin(#fields_len, Some(#name_str))?;
+            let __cerdito_len = _await!(decoder.decode_struct_begin(#fields_len, Some(#name_str)))?;
             #(#field_codes)*
             #compat
-            decoder.decode_struct_end()?;
+            _await!(decoder.decode_struct_end())?;
             Ok(Self { #(#field_idents),* })
         },
         syn::Fields::Unnamed(_) => quote! {
-            let __cerdito_len = decoder.decode_struct_begin(#fields_len, Some(#name_str))?;
+            let __cerdito_len = _await!(decoder.decode_struct_begin(#fields_len, Some(#name_str)))?;
             #(#field_codes)*
             #compat
-            decoder.decode_struct_end()?;
+            _await!(decoder.decode_struct_end())?;
             Ok(Self( #(#field_idents),* ))
         },
         syn::Fields::Unit => quote! {
-            let __cerdito_len = decoder.decode_struct_begin(#fields_len, Some(#name_str))?;
+            let __cerdito_len = _await!(decoder.decode_struct_begin(#fields_len, Some(#name_str)))?;
             #compat
-            decoder.decode_struct_end()?;
+            _await!(decoder.decode_struct_end())?;
             Ok(Self)
         },
     }
@@ -236,9 +237,9 @@ fn generate_encode_for_enum(
             .iter()
             .map(|(_i, field_ident, field_name, _field_type)| {
                 quote! {
-                    encoder.encode_elem_begin(#i, Some(#field_name))?;
-                    #field_ident.encode(encoder)?;
-                    encoder.encode_elem_end()?;
+                    _await!(encoder.encode_elem_begin(#i, Some(#field_name)))?;
+                    _await!(#field_ident.encode(encoder))?;
+                    _await!(encoder.encode_elem_end())?;
                 }
             })
             .collect();
@@ -247,28 +248,28 @@ fn generate_encode_for_enum(
             syn::Fields::Named(_) => quote! {
                 Self::#variant_name { #(#field_idents),* } => {
                     let __cerdito_enum_tag: u32 = (#t).try_into().unwrap(); //TODO: error
-                    encoder.encode_enum_begin(__cerdito_enum_tag, 1, #name_str, #variant_name_str)?;
-                    encoder.encode_struct_begin(#fields_len, None)?;
+                    _await!(encoder.encode_enum_begin(__cerdito_enum_tag, 1, #name_str, #variant_name_str))?;
+                    _await!(encoder.encode_struct_begin(#fields_len, None))?;
                     #(#field_codes)*
-                    encoder.encode_struct_end()?;
-                    encoder.encode_enum_end()?;
+                    _await!(encoder.encode_struct_end())?;
+                    _await!(encoder.encode_enum_end())?;
                 }
             },
             syn::Fields::Unnamed(_) => quote! {
                 Self::#variant_name(#(#field_idents),*) => {
                     let __cerdito_enum_tag: u32 = (#t).try_into().unwrap(); //TODO: error
-                    encoder.encode_enum_begin(__cerdito_enum_tag, 1, #name_str, #variant_name_str)?;
-                    encoder.encode_struct_begin(#fields_len, None)?;
+                    _await!(encoder.encode_enum_begin(__cerdito_enum_tag, 1, #name_str, #variant_name_str))?;
+                    _await!(encoder.encode_struct_begin(#fields_len, None))?;
                     #(#field_codes)*
-                    encoder.encode_struct_end()?;
-                    encoder.encode_enum_end()?;
+                    _await!(encoder.encode_struct_end())?;
+                    _await!(encoder.encode_enum_end())?;
                 }
             },
             syn::Fields::Unit => quote! {
                 Self::#variant_name => {
                     let __cerdito_enum_tag: u32 = (#t).try_into().unwrap(); //TODO: error
-                    encoder.encode_enum_begin(__cerdito_enum_tag, 0, #name_str, #variant_name_str)?;
-                    encoder.encode_enum_end()?;
+                    _await!(encoder.encode_enum_begin(__cerdito_enum_tag, 0, #name_str, #variant_name_str))?;
+                    _await!(encoder.encode_enum_end())?;
                 }
             },
         }
@@ -304,13 +305,13 @@ fn generate_decode_for_enum(
                 .iter()
                 .map(|(i, field_ident, field_name, field_type)| {
                     quote! {
-                        decoder.decode_elem_begin(#i, Some(#field_name))?;
+                        _await!(decoder.decode_elem_begin(#i, Some(#field_name)))?;
                         let #field_ident = if #i < __cerdito_len {
-                            <#field_type as ::cerdito::Decode>::decode(decoder)?
+                            _await!(<#field_type as ::cerdito::Decode>::decode(decoder))?
                         } else { // new program, old data
                             <#field_type>::default()
                         };
-                        decoder.decode_elem_end()?;
+                        _await!(decoder.decode_elem_end())?;
                     }
                 })
                 .collect();
@@ -327,8 +328,9 @@ fn generate_decode_for_enum(
             let fields_len = fields.len();
 
             let compat = quote! {
-                for _ in #fields_len..__cerdito_len { // old program, new data
-                    decoder.decode_skip()?;
+                // old program, new data
+                if __cerdito_len > #fields_len {
+                    _await!(decoder.decode_skip(__cerdito_len - #fields_len))?;
                 }
             };
 
@@ -341,10 +343,10 @@ fn generate_decode_for_enum(
                                 Self::#variant_name { #(#field_idents),* }
                             }
                             1 => {
-                                let __cerdito_len = decoder.decode_struct_begin(#fields_len, None)?;
+                                let __cerdito_len = _await!(decoder.decode_struct_begin(#fields_len, None))?;
                                 #(#field_codes)*
                                 #compat
-                                decoder.decode_struct_end()?;
+                                _await!(decoder.decode_struct_end())?;
                                 Self::#variant_name { #(#field_idents),* }
                             }
                             _ => unreachable!(),
@@ -359,10 +361,10 @@ fn generate_decode_for_enum(
                                 Self::#variant_name(#(#field_idents),*)
                             }
                             1 => {
-                                let __cerdito_len = decoder.decode_struct_begin(#fields_len, None)?;
+                                let __cerdito_len = _await!(decoder.decode_struct_begin(#fields_len, None))?;
                                 #(#field_codes)*
                                 #compat
-                                decoder.decode_struct_end()?;
+                                _await!(decoder.decode_struct_end())?;
                                 Self::#variant_name(#(#field_idents),*)
                             }
                             _ => unreachable!(),
@@ -376,9 +378,9 @@ fn generate_decode_for_enum(
                                 Self::#variant_name
                             }
                             1 => {
-                                let __cerdito_len = decoder.decode_struct_begin(#fields_len, None)?;
+                                let __cerdito_len = _await!(decoder.decode_struct_begin(#fields_len, None))?;
                                 #compat
-                                decoder.decode_struct_end()?;
+                                _await!(decoder.decode_struct_end())?;
                                 Self::#variant_name
                             }
                             _ => unreachable!(),
@@ -390,12 +392,12 @@ fn generate_decode_for_enum(
         .collect();
 
     quote! {
-        let (__cerdito_enum_tag, __cerdito_enum_len) = decoder.decode_enum_begin(#name_str)?;
+        let (__cerdito_enum_tag, __cerdito_enum_len) = _await!(decoder.decode_enum_begin(#name_str))?;
         let __cerdito_enum_value = match __cerdito_enum_tag.try_into().unwrap() { // TODO: error
                 #(#variant_codes)*
                 _ => panic!("Enum {:?} doesn't support variant {}", #name_str, __cerdito_enum_tag),
         };
-        decoder.decode_enum_end()?;
+        _await!(decoder.decode_enum_end())?;
         Ok(__cerdito_enum_value)
     }
 }

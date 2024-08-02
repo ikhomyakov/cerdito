@@ -5,7 +5,6 @@ This binary serialization format is designed to encode a subset of Rust's algebr
 2. Only adding new variants to an enum.
 
 ## TODOs
-* Async version of the library.
 * Fix enum tags: limit to **positive** numbers **up to u32**, allow const expressions in discriminators. Negative disriminators? Consider removing support for explicit variant discriminators.
 * Errors (remove unwraps and panics), figure out if need to insert `?;Ok(...)` or return directly.
 * Decl macro for tuples.

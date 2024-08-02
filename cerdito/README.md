@@ -3,7 +3,6 @@
 This encoding and decoding framework is similar to `serde` but much smaller and simpler (hence its name, `cerdito`). It does not use an intermediary data model, does not utilize the visitor pattern, and does not support zero-copy decoding. However, it provides both synchronous and asynchronous APIs. This framework was implemented mainly to support `rustbif`—a compact binary format for encoding Rust data types.
 
 ## TODOs
-* Async version of the library. 
 * Fix enum tags: limit to **positive** numbers **up to u32**, allow const expressions in discriminators. Negative disriminators? Consider removing support for explicit variant discriminators.
 * Errors (remove unwraps and panics), figure out if need to insert `?;Ok(...)` or return directly.
 * Decl macro for tuples.

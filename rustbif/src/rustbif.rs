@@ -1,3 +1,5 @@
+#![allow(async_fn_in_trait)]
+
 use build_async::*;
 use std::convert::TryInto;
 use std::fmt::Debug;
@@ -80,10 +82,11 @@ impl VarIntLen {
         Self::EnumTag(buf)
     }
 
+    #[_async]
     fn from_reader<R: Reader>(reader: &mut R) -> Result<(Self, usize), R::Error> {
         let mut cnt: usize = 0;
         let mut buf = [0_u8; 16];
-        cnt += reader.read(&mut buf[..1])?;
+        cnt += _await!(reader.read(&mut buf[..1]))?;
         let header = buf[0];
         match header.leading_ones() {
             0 => Ok((
@@ -111,30 +114,31 @@ impl VarIntLen {
             3 => {
                 let mut buf = [0_u8; 16];
                 let len: usize = ((header & 0b00001111) + 1).into();
-                cnt += reader.read(&mut buf[..len])?;
+                cnt += _await!(reader.read(&mut buf[..len]))?;
                 Ok((Self::Value(buf), cnt))
             }
             4 => {
                 let mut buf = [0_u8; 8];
                 let len: usize = ((header & 0b00000111) + 1).into();
-                cnt += reader.read(&mut buf[..len])?;
+                cnt += _await!(reader.read(&mut buf[..len]))?;
                 Ok((Self::ByteSize(buf), cnt))
             }
             5 => {
                 let mut buf = [0_u8; 4];
                 let len: usize = ((header & 0b00000011) + 1).into();
-                cnt += reader.read(&mut buf[..len])?;
+                cnt += _await!(reader.read(&mut buf[..len]))?;
                 Ok((Self::StructLen(buf), cnt))
             }
             _ => {
                 let mut buf = [0_u8; 4];
                 let len: usize = ((header & 0b00000011) + 1).into();
-                cnt += reader.read(&mut buf[..len])?;
+                cnt += _await!(reader.read(&mut buf[..len]))?;
                 Ok((Self::EnumTag(buf), cnt))
             }
         }
     }
 
+    #[_async]
     fn write<W: Writer>(&self, writer: &mut W) -> Result<usize, W::Error> {
         let (mask1, mask2, bytes, corr_sub, corr_add, threshold) = match self {
             Self::Zero => (M_VALUE, M_VALUE_LEN, &[0][..], 0, 0, 0),
@@ -148,15 +152,15 @@ impl VarIntLen {
         let v = bytes[0] + corr_add;
         match n {
             1 if v == 0 => {
-                cnt += writer.write(&[0])?;
+                cnt += _await!(writer.write(&[0]))?;
             }
             1 if v <= threshold => {
-                cnt += writer.write(&[mask1 | (v - corr_sub)])?;
+                cnt += _await!(writer.write(&[mask1 | (v - corr_sub)]))?;
             }
             _ => {
                 let v: u8 = n.try_into().unwrap();
-                cnt += writer.write(&[mask2 | (v - 1)])?;
-                cnt += writer.write(&bytes[..n])?;
+                cnt += _await!(writer.write(&[mask2 | (v - 1)]))?;
+                cnt += _await!(writer.write(&bytes[..n]))?;
             }
         }
         Ok(cnt)
@@ -167,14 +171,21 @@ impl VarIntLen {
 
 pub trait Reader {
     type Error;
-    fn read(&mut self, bytes: &mut [u8]) -> Result<usize, Self::Error>;
-}
-pub trait Writer {
-    type Error;
-    fn write(&mut self, bytes: &[u8]) -> Result<usize, Self::Error>;
+    #[_async]
+    fn read(&mut self, _bytes: &mut [u8]) -> Result<usize, Self::Error> {
+        unimplemented!();
+    }
 }
 
-impl Reader for std::io::BufReader<std::fs::File> {
+pub trait Writer {
+    type Error;
+    #[_async]
+    fn write(&mut self, _bytes: &[u8]) -> Result<usize, Self::Error> {
+        unimplemented!();
+    }
+}
+
+impl<T: std::io::Read> Reader for std::io::BufReader<T> {
     type Error = std::io::Error;
     fn read(&mut self, bytes: &mut [u8]) -> Result<usize, Self::Error> {
         let n = std::io::Read::read(self, bytes)?;
@@ -182,7 +193,7 @@ impl Reader for std::io::BufReader<std::fs::File> {
     }
 }
 
-impl Writer for std::io::BufWriter<std::fs::File> {
+impl<T: std::io::Write> Writer for std::io::BufWriter<T> {
     type Error = std::io::Error;
     fn write(&mut self, bytes: &[u8]) -> Result<usize, Self::Error> {
         let n = std::io::Write::write(self, bytes)?;
@@ -190,19 +201,21 @@ impl Writer for std::io::BufWriter<std::fs::File> {
     }
 }
 
-impl Writer for Vec<u8> {
+impl Reader for Vec<u8> {
     type Error = ();
-    fn write(&mut self, bytes: &[u8]) -> Result<usize, Self::Error> {
-        self.extend_from_slice(bytes);
+    #[_async]
+    fn read(&mut self, bytes: &mut [u8]) -> Result<usize, Self::Error> {
+        bytes.copy_from_slice(&self[..bytes.len()]);
+        self.drain(..bytes.len());
         Ok(bytes.len())
     }
 }
 
-impl Reader for Vec<u8> {
+impl Writer for Vec<u8> {
     type Error = ();
-    fn read(&mut self, bytes: &mut [u8]) -> Result<usize, Self::Error> {
-        bytes.copy_from_slice(&self[..bytes.len()]);
-        self.drain(..bytes.len());
+    #[_async]
+    fn write(&mut self, bytes: &[u8]) -> Result<usize, Self::Error> {
+        self.extend_from_slice(bytes);
         Ok(bytes.len())
     }
 }
@@ -212,9 +225,9 @@ impl Reader for Vec<u8> {
 macro_rules! fn_decode_uint {
     ($ty:ty, $order: ident) => {
         paste::item! {
-            fn [<decode_ $ty>](&mut self) -> Result<$ty, Self::Error> {
+            #[_async] fn [<decode_ $ty>](&mut self) -> Result<$ty, Self::Error> {
                 let mut buf = [0_u8; std::mem::size_of::<$ty>()];
-                self.decode_uint(&mut buf)?;
+                _await!(self.decode_uint(&mut buf))?;
                 Ok($ty::[<from_ $order _bytes>](buf))
             }
         }
@@ -223,9 +236,9 @@ macro_rules! fn_decode_uint {
 macro_rules! fn_decode_int {
     ($ty:ty, $uty:ty, $order: ident) => {
         paste::item! {
-            fn [<decode_ $ty>](&mut self) -> Result<$ty, Self::Error> {
+            #[_async] fn [<decode_ $ty>](&mut self) -> Result<$ty, Self::Error> {
                 let mut buf = [0_u8; std::mem::size_of::<$ty>()];
-                self.decode_uint(&mut buf)?;
+                _await!(self.decode_uint(&mut buf))?;
                 Ok(ZigZag::decode($uty::[<from_ $order _bytes>](buf)))
             }
         }
@@ -235,8 +248,8 @@ macro_rules! fn_decode_int {
 macro_rules! fn_decode_vec {
     ($ty:ty, $closure: expr) => {
         paste::item! {
-            fn [<decode_vec_ $ty>](&mut self, len: Option<usize>) -> Result<Vec<$ty>, Self::Error> {
-                let size = self.decode_bytes_begin(len.map(|x| x * std::mem::size_of::<$ty>()))?;
+            #[_async] fn [<decode_vec_ $ty>](&mut self, len: Option<usize>) -> Result<Vec<$ty>, Self::Error> {
+                let size = _await!(self.decode_bytes_begin(len.map(|x| x * std::mem::size_of::<$ty>())))?;
                 let len = size / std::mem::size_of::<$ty>();
                 if size != len * std::mem::size_of::<$ty>() {
                     panic!("byte array size {} is not a multiple of element size {}", size, std::mem::size_of::<$ty>());
@@ -244,10 +257,10 @@ macro_rules! fn_decode_vec {
                 let mut v = Vec::with_capacity(len);
                 let mut buf = [0_u8; std::mem::size_of::<$ty>()];
                 for _i in 0..len {
-                    self.decode_bytes_payload(&mut buf)?;
-                    v.push($closure(buf));
+                    _await!(self.decode_bytes_payload(&mut buf))?;
+                    v.push(($closure)(buf));
                 }
-                self.decode_bytes_end()?;
+                _await!(self.decode_bytes_end())?;
                 Ok(v)
             }
         }
@@ -261,11 +274,17 @@ pub struct Decoder<R: Reader> {
 impl<R: Reader> cerdito::Decoder for Decoder<R> {
     type Error = R::Error;
 
+    #[_async]
     fn decode_bool(&mut self) -> Result<bool, Self::Error> {
-        Ok(if self.decode_u8()? != 0 { true } else { false })
+        Ok(if _await!(self.decode_u8())? != 0 {
+            true
+        } else {
+            false
+        })
     }
+    #[_async]
     fn decode_char(&mut self) -> Result<char, Self::Error> {
-        Ok(char::from_u32(self.decode_u32()?).unwrap())
+        Ok(char::from_u32(_await!(self.decode_u32())?).unwrap())
     }
     fn_decode_uint! {u8, le}
     fn_decode_uint! {u16, le}
@@ -280,19 +299,22 @@ impl<R: Reader> cerdito::Decoder for Decoder<R> {
     fn_decode_uint! {f32, be}
     fn_decode_uint! {f64, be}
 
+    #[_async]
     fn decode_string(&mut self) -> Result<String, Self::Error> {
-        Ok(String::from_utf8(self.decode_binary(None)?).unwrap())
+        Ok(String::from_utf8(_await!(self.decode_binary(None))?).unwrap())
     }
+    #[_async]
     fn decode_binary(&mut self, size: Option<usize>) -> Result<Vec<u8>, Self::Error> {
-        let size = self.decode_bytes_begin(size)?;
+        let size = _await!(self.decode_bytes_begin(size))?;
         let mut buf = vec![0_u8; size];
-        self.decode_bytes_payload(&mut buf)?;
-        self.decode_bytes_end()?;
+        _await!(self.decode_bytes_payload(&mut buf))?;
+        _await!(self.decode_bytes_end())?;
         Ok(buf)
     }
 
+    #[_async]
     fn decode_vec_u8(&mut self, len: Option<usize>) -> Result<Vec<u8>, Self::Error> {
-        self.decode_binary(len)
+        _await!(self.decode_binary(len))
     }
     fn_decode_vec! {bool, |buf| if u8::from_le_bytes(buf) != 0 {true} else {false}}
     fn_decode_vec! {char, |buf| char::from_u32(u32::from_le_bytes(buf)).unwrap()}
@@ -308,20 +330,23 @@ impl<R: Reader> cerdito::Decoder for Decoder<R> {
     fn_decode_vec! {f32, |buf| f32::from_le_bytes(buf)}
     fn_decode_vec! {f64, |buf| f64::from_le_bytes(buf)}
 
+    #[_async]
     fn decode_seq_begin(&mut self, _len: Option<usize>) -> Result<usize, Self::Error> {
-        let (v, _n) = VarIntLen::from_reader(&mut self.reader)?;
+        let (v, _n) = _await!(VarIntLen::from_reader(&mut self.reader))?;
         match v {
             VarIntLen::StructLen(buf) => Ok(u32::from_le_bytes(buf).try_into().unwrap()),
             VarIntLen::Zero => Ok(0),
             _ => panic!("bad seq header"),
         }
     }
+    #[_async]
     fn decode_seq_end(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
 
+    #[_async]
     fn decode_enum_begin(&mut self, _enum_name: &str) -> Result<(u32, usize), Self::Error> {
-        let (v, _n) = VarIntLen::from_reader(&mut self.reader)?;
+        let (v, _n) = _await!(VarIntLen::from_reader(&mut self.reader))?;
         match v {
             VarIntLen::EnumTag(buf) => Ok((u32::from_le_bytes(buf), 1)),
             VarIntLen::Value(buf) => Ok((u32::from_le_bytes(buf[..4].try_into().unwrap()), 0)),
@@ -329,42 +354,50 @@ impl<R: Reader> cerdito::Decoder for Decoder<R> {
             _ => panic!("bad varenum header"),
         }
     }
+    #[_async]
     fn decode_enum_end(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
 
+    #[_async]
     fn decode_struct_begin(
         &mut self,
         _len: usize,
         _struct_name: Option<&str>,
     ) -> Result<usize, Self::Error> {
-        let (v, _n) = VarIntLen::from_reader(&mut self.reader)?;
+        let (v, _n) = _await!(VarIntLen::from_reader(&mut self.reader))?;
         match v {
             VarIntLen::StructLen(buf) => Ok(u32::from_le_bytes(buf).try_into().unwrap()),
             VarIntLen::Zero => Ok(0),
             _ => panic!("bad varstruct header"),
         }
     }
+    #[_async]
     fn decode_struct_end(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
 
+    #[_async]
     fn decode_bytes_begin(&mut self, _size: Option<usize>) -> Result<usize, Self::Error> {
-        let (v, _n) = VarIntLen::from_reader(&mut self.reader)?;
+        let (v, _n) = _await!(VarIntLen::from_reader(&mut self.reader))?;
         match v {
             VarIntLen::ByteSize(buf) => Ok(u64::from_le_bytes(buf).try_into().unwrap()),
             VarIntLen::Zero => Ok(0),
             _ => panic!("bad varbyte header"),
         }
     }
+    #[_async]
     fn decode_bytes_payload(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        self.reader.read(buf)
+        _await!(self.reader.read(buf))
     }
+    #[_async]
     fn decode_bytes_end(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
+
+    #[_async]
     fn decode_uint(&mut self, bytes: &mut [u8]) -> Result<usize, Self::Error> {
-        let (v, _n) = VarIntLen::from_reader(&mut self.reader)?;
+        let (v, _n) = _await!(VarIntLen::from_reader(&mut self.reader))?;
         match v {
             VarIntLen::Zero => {
                 bytes.fill(0);
@@ -377,32 +410,31 @@ impl<R: Reader> cerdito::Decoder for Decoder<R> {
             _ => panic!("bad varint header: {:?}", v),
         }
     }
-    fn decode_skip(&mut self) -> Result<usize, Self::Error> {
-        let (v, _n) = VarIntLen::from_reader(&mut self.reader)?;
-        match v {
-            VarIntLen::ByteSize(buf) => {
-                let size = u64::from_le_bytes(buf).try_into().unwrap();
-                let mut buf = vec![0_u8; size];
-                self.decode_bytes_payload(&mut buf)?;
-                Ok(size)
-            }
-            VarIntLen::StructLen(buf) => {
-                let len = u32::from_le_bytes(buf).try_into().unwrap();
-                for i in 0..len {
-                    self.decode_elem_begin(i, None)?;
-                    self.decode_skip()?;
-                    self.decode_elem_end()?;
+
+    #[_async]
+    fn decode_skip(&mut self, n: usize) -> Result<(), Self::Error> {
+        let mut counter = n;
+
+        while counter != 0 {
+            counter -= 1;
+            let (v, _n) = _await!(VarIntLen::from_reader(&mut self.reader))?;
+            match v {
+                VarIntLen::ByteSize(buf) => {
+                    let size = u64::from_le_bytes(buf).try_into().unwrap();
+                    let mut buf = vec![0_u8; size];
+                    _await!(self.decode_bytes_payload(&mut buf))?;
                 }
-                Ok(len)
+                VarIntLen::StructLen(buf) => {
+                    let len: usize = u32::from_le_bytes(buf).try_into().unwrap();
+                    counter += len;
+                }
+                VarIntLen::EnumTag(_buf) => {
+                    counter += 1;
+                }
+                VarIntLen::Value(_) | VarIntLen::Zero => {}
             }
-            VarIntLen::EnumTag(_buf) => {
-                self.decode_elem_begin(0, None)?;
-                self.decode_skip()?;
-                self.decode_elem_end()?;
-                Ok(1)
-            }
-            VarIntLen::Value(_) | VarIntLen::Zero => Ok(1),
         }
+        Ok(())
     }
 }
 
@@ -411,12 +443,12 @@ impl<R: Reader> cerdito::Decoder for Decoder<R> {
 macro_rules! fn_encode_vec {
     ($ty:ty) => {
         paste::item! {
-            fn [<encode_vec_ $ty>](&mut self, values: &[$ty]) -> Result<(), Self::Error> {
-                self.encode_bytes_begin(values.len() * std::mem::size_of::<$ty>())?;
+            #[_async] fn [<encode_vec_ $ty>](&mut self, values: &[$ty]) -> Result<(), Self::Error> {
+                _await!(self.encode_bytes_begin(values.len() * std::mem::size_of::<$ty>()))?;
                 for value in values {
-                    self.encode_bytes_payload(&value.to_le_bytes())?;
+                    _await!(self.encode_bytes_payload(&value.to_le_bytes()))?;
                 }
-                self.encode_bytes_end()
+                _await!(self.encode_bytes_end())
             }
         }
     };
@@ -424,8 +456,8 @@ macro_rules! fn_encode_vec {
 macro_rules! fn_encode_uint {
     ($ty:ty, $order: ident) => {
         paste::item! {
-            fn [<encode_ $ty>](&mut self, value: &$ty) -> Result<(), Self::Error> {
-                self.encode_uint(&value.[<to_ $order _bytes>]())
+            #[_async] fn [<encode_ $ty>](&mut self, value: &$ty) -> Result<(), Self::Error> {
+                _await!(self.encode_uint(&value.[<to_ $order _bytes>]()))
             }
         }
     };
@@ -433,8 +465,8 @@ macro_rules! fn_encode_uint {
 macro_rules! fn_encode_int {
     ($ty:ty, $order: ident) => {
         paste::item! {
-            fn [<encode_ $ty>](&mut self, value: &$ty) -> Result<(), Self::Error> {
-                self.encode_uint(&ZigZag::encode(*value).[<to_ $order _bytes>]())
+            #[_async] fn [<encode_ $ty>](&mut self, value: &$ty) -> Result<(), Self::Error> {
+                _await!(self.encode_uint(&ZigZag::encode(*value).[<to_ $order _bytes>]()))
             }
         }
     };
@@ -447,17 +479,21 @@ pub struct Encoder<W: Writer> {
 impl<W: Writer> cerdito::Encoder for Encoder<W> {
     type Error = W::Error;
 
+    #[_async]
     fn encode_bool(&mut self, value: &bool) -> Result<(), Self::Error> {
-        self.encode_u8(&(*value).into())
+        _await!(self.encode_u8(&(*value).into()))
     }
+    #[_async]
     fn encode_char(&mut self, value: &char) -> Result<(), Self::Error> {
-        self.encode_u32(&(*value).into())
+        _await!(self.encode_u32(&(*value).into()))
     }
+    #[_async]
     fn encode_u8(&mut self, value: &u8) -> Result<(), Self::Error> {
-        self.encode_uint(&[*value])
+        _await!(self.encode_uint(&[*value]))
     }
+    #[_async]
     fn encode_i8(&mut self, value: &i8) -> Result<(), Self::Error> {
-        self.encode_uint(&[ZigZag::encode(*value)])
+        _await!(self.encode_uint(&[ZigZag::encode(*value)]))
     }
     fn_encode_uint! {u16, le}
     fn_encode_uint! {u32, le}
@@ -470,33 +506,38 @@ impl<W: Writer> cerdito::Encoder for Encoder<W> {
     fn_encode_uint! {f32, be}
     fn_encode_uint! {f64, be}
 
+    #[_async]
     fn encode_binary(&mut self, value: &[u8]) -> Result<(), Self::Error> {
-        self.encode_bytes_begin(value.len())?;
-        self.encode_bytes_payload(value)?;
-        self.encode_bytes_end()
+        _await!(self.encode_bytes_begin(value.len()))?;
+        _await!(self.encode_bytes_payload(value))?;
+        _await!(self.encode_bytes_end())
     }
 
+    #[_async]
     fn encode_string(&mut self, value: &str) -> Result<(), Self::Error> {
-        self.encode_binary(value.as_bytes())
+        _await!(self.encode_binary(value.as_bytes()))
     }
 
+    #[_async]
     fn encode_vec_bool(&mut self, values: &[bool]) -> Result<(), Self::Error> {
-        self.encode_bytes_begin(values.len() * std::mem::size_of::<bool>())?;
+        _await!(self.encode_bytes_begin(values.len() * std::mem::size_of::<bool>()))?;
         for value in values {
-            self.encode_bytes_payload(&[(*value).into()])?;
+            _await!(self.encode_bytes_payload(&[(*value).into()]))?;
         }
-        self.encode_bytes_end()
+        _await!(self.encode_bytes_end())
     }
+    #[_async]
     fn encode_vec_char(&mut self, values: &[char]) -> Result<(), Self::Error> {
-        self.encode_bytes_begin(values.len() * std::mem::size_of::<char>())?;
+        _await!(self.encode_bytes_begin(values.len() * std::mem::size_of::<char>()))?;
         for value in values {
             let value: u32 = (*value).into();
-            self.encode_bytes_payload(&value.to_le_bytes())?;
+            _await!(self.encode_bytes_payload(&value.to_le_bytes()))?;
         }
-        self.encode_bytes_end()
+        _await!(self.encode_bytes_end())
     }
+    #[_async]
     fn encode_vec_u8(&mut self, values: &[u8]) -> Result<(), Self::Error> {
-        self.encode_binary(values)
+        _await!(self.encode_binary(values))
     }
     fn_encode_vec! {u16}
     fn_encode_vec! {u32}
@@ -510,29 +551,36 @@ impl<W: Writer> cerdito::Encoder for Encoder<W> {
     fn_encode_vec! {f32}
     fn_encode_vec! {f64}
 
+    #[_async]
     fn encode_arr_begin(&mut self, len: usize) -> Result<(), Self::Error> {
-        self.encode_vec_begin(len)
+        _await!(self.encode_vec_begin(len))
     }
+    #[_async]
     fn encode_arr_end(&mut self) -> Result<(), Self::Error> {
-        self.encode_vec_end()
+        _await!(self.encode_vec_end())
     }
 
+    #[_async]
     fn encode_vec_begin(&mut self, len: usize) -> Result<(), Self::Error> {
-        self.encode_seq_begin(len)
+        _await!(self.encode_seq_begin(len))
     }
+    #[_async]
     fn encode_vec_end(&mut self) -> Result<(), Self::Error> {
-        self.encode_seq_end()
+        _await!(self.encode_seq_end())
     }
 
+    #[_async]
     fn encode_seq_begin(&mut self, len: usize) -> Result<(), Self::Error> {
         let v = VarIntLen::from_struct_len(len.try_into().unwrap());
-        v.write(&mut self.writer)?;
+        _await!(v.write(&mut self.writer))?;
         Ok(())
     }
+    #[_async]
     fn encode_seq_end(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
 
+    #[_async]
     fn encode_enum_begin(
         &mut self,
         enum_tag: u32,
@@ -545,45 +593,53 @@ impl<W: Writer> cerdito::Encoder for Encoder<W> {
             1 => VarIntLen::from_enum_tag(enum_tag),
             _ => unreachable!(),
         };
-        v.write(&mut self.writer)?;
+        _await!(v.write(&mut self.writer))?;
         Ok(())
     }
+    #[_async]
     fn encode_enum_end(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
 
+    #[_async]
     fn encode_struct_begin(
         &mut self,
         len: usize,
         _struct_name: Option<&str>,
     ) -> Result<(), Self::Error> {
         let v = VarIntLen::from_struct_len(len.try_into().unwrap());
-        v.write(&mut self.writer)?;
+        _await!(v.write(&mut self.writer))?;
         Ok(())
     }
+    #[_async]
     fn encode_struct_end(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
 
+    #[_async]
     fn encode_bytes_begin(&mut self, size: usize) -> Result<(), Self::Error> {
         let v = VarIntLen::from_byte_size(size.try_into().unwrap());
-        v.write(&mut self.writer)?;
+        _await!(v.write(&mut self.writer))?;
         Ok(())
     }
+    #[_async]
     fn encode_bytes_payload(&mut self, value: &[u8]) -> Result<(), Self::Error> {
-        self.writer.write(value)?;
+        _await!(self.writer.write(value))?;
         Ok(())
     }
+    #[_async]
     fn encode_bytes_end(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
 
+    #[_async]
     fn encode_uint(&mut self, bytes: &[u8]) -> Result<(), Self::Error> {
         let v = VarIntLen::from_value_slice(bytes);
-        v.write(&mut self.writer)?;
+        _await!(v.write(&mut self.writer))?;
         Ok(())
     }
 
+    #[_async]
     fn encode_elem_begin(
         &mut self,
         _index: usize,
@@ -592,6 +648,7 @@ impl<W: Writer> cerdito::Encoder for Encoder<W> {
         Ok(())
     }
 
+    #[_async]
     fn encode_elem_end(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }

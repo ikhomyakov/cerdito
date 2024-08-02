@@ -1,6 +1,6 @@
-use cerdito::{Decode, Encode, ByteVec, ByteArr};
+use build_async::*;
+use cerdito::{ByteArr, ByteVec, Decode, Encode};
 use multibase::Base;
-//use std::convert::TryInto;
 use std::fmt::Debug;
 
 //-------Samples-----------------------
@@ -135,14 +135,16 @@ enum EncryptionKey {
 struct FileName(String); // string w/o '/'
 
 impl Encode for FileName {
+    #[_async]
     fn encode<E: cerdito::Encoder>(&self, encoder: &mut E) -> Result<(), E::Error> {
-        self.0.encode(encoder)
+        _await!(self.0.encode(encoder))
     }
 }
 
 impl Decode for FileName {
+    #[_async]
     fn decode<D: cerdito::Decoder>(decoder: &mut D) -> Result<Self, D::Error> {
-        Ok(FileName(String::decode(decoder)?))
+        Ok(FileName(_await!(String::decode(decoder))?))
     }
 }
 
